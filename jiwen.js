@@ -68,6 +68,10 @@ function createJiwen(opts) {
     arousalConnectionRiseThreshold: 1.0,  // connection 超过此值 arousal 上升（1.0=永不）
     arousalConnectionRiseRate:     0.002, // connection 高时 arousal 上升速率（与回归竞争）
 
+    // Arousal 锁定：心情好时兴奋不容易消退（亲密场景保持热度）
+    arousalLockThreshold: 1.0,     // valence 超过此值触发锁定（1.0=永不）
+    arousalLockFactor:    1.0,     // 回归速率乘数（0.3=减慢 70%）
+
     // 骄傲防御：被冷落时 pride 向正向漂移（心理防御）
     prideDefendThreshold: 1.0, // connection 超过此值触发防御（1.0=永不）
     prideDefendTarget:    0.5, // 防御时 pride 漂移目标
@@ -324,12 +328,17 @@ function createJiwen(opts) {
     const sagaArousalBias = sagaBias?.arousal || 0;
     const arousalSetpoint = clamp((rates.arousalSetpoint || 0) + sagaArousalBias, axes.arousal[0], axes.arousal[1]);
 
+    // Arousal 锁定：心情好时兴奋不容易消退
+    const effectiveArousalRegress = state.valence >= rates.arousalLockThreshold
+      ? rates.arousalRegress * rates.arousalLockFactor
+      : rates.arousalRegress;
+
     // 回归力：始终生效，向设定点漂移
     let arousalRegressForce = 0;
     if (state.arousal > arousalSetpoint) {
-      arousalRegressForce = -rates.arousalRegress * mins;
+      arousalRegressForce = -effectiveArousalRegress * mins;
     } else if (state.arousal < arousalSetpoint) {
-      arousalRegressForce = rates.arousalRegress * mins;
+      arousalRegressForce = effectiveArousalRegress * mins;
     }
 
     // 上升力：connection 高时，等待让人焦躁

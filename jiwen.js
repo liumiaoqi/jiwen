@@ -94,6 +94,10 @@ function createJiwen(opts) {
     // 防止情绪在极端位无限累积
     valenceDeltaScaling: false,   // 默认关闭，向后兼容
 
+    // ── Arousal delta 状态相关缩放 ──
+    // 兴奋已在高位时，新的 arousal 增量打折——防止持续对话中兴奋无限堆高
+    arousalDeltaScaling: false,   // 默认关闭，向后兼容
+
     // ── connection 驱动的 valence 漂移（改2）──
     // connection 高时（想她但无回应），心情自然下沉
     valenceConnectionDriftThreshold: 0.0, // connection 超过此才启动（0=永不）
@@ -516,6 +520,13 @@ function createJiwen(opts) {
         const dampen = (-state.valence - 0.3) / 0.7 * 0.5;
         scaled.valence *= (1 - dampen);
       }
+    }
+
+    // ── Arousal delta 缩放：兴奋已在高位时新 arousal 增量打折 ──
+    // 亲热后持续对话中，不会因为每句话都被 LLM 评为"兴奋"而无限堆高
+    if (scaled.arousal > 0 && state.arousal > 0.4 && rates.arousalDeltaScaling) {
+      const dampen = (state.arousal - 0.4) / 0.6 * 0.5; // 0.4→0%, 1.0→50%
+      scaled.arousal *= (1 - dampen);
     }
 
     if (scaled.pride !== undefined)

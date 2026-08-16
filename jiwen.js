@@ -217,6 +217,17 @@ function createJiwen(opts) {
       }
     }
 
+    // ── 昼夜偏置：睡眠-觉醒节律对 arousal 设定点与回归速率的调制 ──
+    // 可选回调，由外部注入。返回 { arousal: 设定点偏置, arousalRegressMult: 回归速率乘数 }
+    let circadianBias = null;
+    if (opts.getCircadianBias) {
+      try {
+        circadianBias = await opts.getCircadianBias();
+      } catch (e) {
+        // getCircadianBias 失败不应阻断 tick，静默回退
+      }
+    }
+
     // ── 连接需求：时间分段加速 + valence 耦合 ──
     const lastMsg = opts.getLastMessage ? opts.getLastMessage() : null;
     const baseRate = opts.connectionRateFn
@@ -330,12 +341,15 @@ function createJiwen(opts) {
 
     // ── Arousal（唤醒度）：向设定点漂移 + 等待焦躁（两力竞争）──
     const sagaArousalBias = sagaBias?.arousal || 0;
-    const arousalSetpoint = clamp((rates.arousalSetpoint || 0) + sagaArousalBias, axes.arousal[0], axes.arousal[1]);
+    const circadianArousalBias = circadianBias?.arousal || 0;
+    const circadianRegressMult = circadianBias?.arousalRegressMult || 1.0;
+    const arousalSetpoint = clamp((rates.arousalSetpoint || 0) + sagaArousalBias + circadianArousalBias, axes.arousal[0], axes.arousal[1]);
 
-    // Arousal 锁定：心情好时兴奋不容易消退
+    // Arousal 锁定：心情好时兴奋不容易消退（昼夜睡眠压会放大回归速率，但锁定仍生效）
+    const baseArousalRegress = rates.arousalRegress * circadianRegressMult;
     const effectiveArousalRegress = state.valence >= rates.arousalLockThreshold
-      ? rates.arousalRegress * rates.arousalLockFactor
-      : rates.arousalRegress;
+      ? baseArousalRegress * rates.arousalLockFactor
+      : baseArousalRegress;
 
     // 回归力：始终生效，向设定点漂移
     let arousalRegressForce = 0;

@@ -169,6 +169,16 @@ const jiwen = createJiwen({
     return 0.0007;
   },
 
+  // ── 昼夜节律偏置（可选）——睡眠-觉醒节律对 arousal 设定点与回归速率的调制 ──
+  getCircadianBias: () => {
+    const hour = new Date().getHours();
+    const deepNight = hour >= 23 || hour < 6;
+    return {
+      arousal: deepNight ? -0.4 : 0,            // 设定点偏置（越负越困）
+      arousalRegressMult: deepNight ? 1.5 : 1.0, // 回归速率乘数（深夜困得更快）
+    };
+  },
+
   // ── 持久化（可选但推荐）──
   onSave: async (state) => {
     await db.set('jiwen_state', JSON.stringify(state));

@@ -686,6 +686,93 @@ describe('回归 Regression', () => {
 });
 
 // ============================================================
+// 决策轨迹 Trigger trace
+// ============================================================
+describe('决策轨迹 TriggerTrace', () => {
+
+  it('pride 挡住开口 + immersion 缓冲：轨迹能说明为什么没开口', async () => {
+    const { instance } = makeTestJiwen({
+      initialState: { connection: 0.40, pride: 0.90, immersion: 0.50 },
+      thresholds: { observation: 0.20, considerContact: 0.35, forceContact: 0.80, prideBlock: 0.50 },
+      rates: { connectionAccel: 0, prideRegress: 0, immersionDecay: 0 },
+      connectionRateFn: () => 0,
+    });
+    await instance.load();
+    const triggers = await instance.tick(1);
+
+    assert(triggers.length === 0, `不该有触发，实际: ${JSON.stringify(triggers)}`);
+    const gate = instance.getTriggerTrace().find(t => t.gate === '开口' && !t.fired);
+    assert(gate, '应有被挡的「开口」闸门记录');
+    assert(/pride/.test(gate.reason), `原因应提到 pride，实际: ${gate.reason}`);
+    assert(/immersion/.test(gate.reason), `原因应提到 immersion 缓冲，实际: ${gate.reason}`);
+    assert(gate.detail.pride >= 0.50, 'detail 里应带上 pride 数值');
+  });
+
+  it('pride 挡住但 immersion 不高：轨迹标出转成了 find_activity', async () => {
+    const { instance } = makeTestJiwen({
+      initialState: { connection: 0.40, pride: 0.90, immersion: 0.05 },
+      thresholds: { observation: 0.20, considerContact: 0.35, forceContact: 0.80, prideBlock: 0.50 },
+      rates: { connectionAccel: 0, prideRegress: 0, immersionDecay: 0 },
+      connectionRateFn: () => 0,
+    });
+    await instance.load();
+    const triggers = await instance.tick(1);
+
+    assert(triggers.some(t => t.action === 'find_activity' && t.reason === 'pride_block'),
+      `应转成 find_activity(pride_block)，实际: ${JSON.stringify(triggers)}`);
+    const gate = instance.getTriggerTrace().find(t => t.gate === '开口' && !t.fired);
+    assert(gate && gate.divertedTo === 'find_activity', '轨迹应标出 divertedTo');
+  });
+
+  it('正常开口时轨迹记录 fired', async () => {
+    const { instance } = makeTestJiwen({
+      initialState: { connection: 0.40, pride: 0.10, immersion: 0 },
+      thresholds: { observation: 0.20, considerContact: 0.35, forceContact: 0.80, prideBlock: 0.50 },
+      rates: { connectionAccel: 0, prideRegress: 0, immersionDecay: 0 },
+      connectionRateFn: () => 0,
+    });
+    await instance.load();
+    const triggers = await instance.tick(1);
+
+    assert(triggers.some(t => t.action === 'contact'), '应触发 contact');
+    const gate = instance.getTriggerTrace().find(t => t.gate === '开口' && t.fired);
+    assert(gate && gate.action === 'contact', '轨迹应记开口已过闸');
+  });
+
+  it('还没到观察线时，轨迹说明还差多少', async () => {
+    const { instance } = makeTestJiwen({
+      initialState: { connection: 0.05 },
+      thresholds: { observation: 0.20, considerContact: 0.35, forceContact: 0.80 },
+      rates: { connectionAccel: 0 },
+      connectionRateFn: () => 0,
+    });
+    await instance.load();
+    await instance.tick(1);
+
+    const gate = instance.getTriggerTrace().find(t => t.gate === '开口' && !t.fired);
+    assert(gate, '应有未触发的记录');
+    assert(/观察线/.test(gate.reason), `原因应提到观察线，实际: ${gate.reason}`);
+    assert(gate.detail.还差 > 0, 'detail 应给出还差多少');
+  });
+
+  it('explainTrigger 给出一句话结论', async () => {
+    const { instance } = makeTestJiwen({
+      initialState: { connection: 0.40, pride: 0.90, immersion: 0.50 },
+      thresholds: { observation: 0.20, considerContact: 0.35, forceContact: 0.80, prideBlock: 0.50 },
+      rates: { connectionAccel: 0, prideRegress: 0, immersionDecay: 0 },
+      connectionRateFn: () => 0,
+    });
+    await instance.load();
+    await instance.tick(1);
+
+    const text = instance.explainTrigger();
+    assert(typeof text === 'string' && text.length > 0, 'explainTrigger 应返回非空字符串');
+    assert(/未触发/.test(text), `未触发时应说明，实际: ${text}`);
+  });
+
+});
+
+// ============================================================
 // 运行
 // ============================================================
 (async () => {

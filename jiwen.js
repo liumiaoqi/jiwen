@@ -164,6 +164,9 @@ function createJiwen(opts) {
   let state = { ...DEFAULT_STATE };
   let _loaded = false;
 
+  // 上一次阈值判定的决策轨迹（见 getTriggerTrace）
+  let lastTriggerTrace = [];
+
   // ── 边际递减追踪（改3）──
   // 闭包内，不持久化。记录最近 N 分钟内的 valence delta
   const _valenceDeltaLog = []; // [{ time: ms, value: number }]
@@ -400,6 +403,10 @@ function createJiwen(opts) {
         `速率:${effectiveRate?.toFixed(4) || '?'}/min | ` +
         `触发: ${triggers.length > 0 ? triggers.map(t => t.action + (t.reason ? '(' + t.reason + ')' : '')).join(', ') : '—'}`
       );
+      // 没触发时把「被谁挡的」也打出来——这是调试时最常问的那个问题
+      if (triggers.length === 0) {
+        log(`[积温] 未触发原因: ${explainTrigger()}`);
+      }
     } else if (triggers.length > 0) {
       // 默认模式：仅阈值触发时打印
       log(
@@ -421,17 +428,32 @@ function createJiwen(opts) {
   // ── 阈值判断 ────────────────────
   function checkThresholds() {
     const triggers = [];
+    // 决策轨迹：每个闸门记一条——过了还是被挡、被哪根轴挡的、差多少。
+    // 判定逻辑只在这里写一遍，轨迹在同一个分支里顺手记，避免两处逻辑漂移。
+    const trace = [];
     const c = state.connection;
     const p = state.pride;
     const i = state.immersion;
     const v = state.valence;
     const a = state.arousal;
+    const r3 = (n) => Number(n.toFixed(3));
 
     if (c >= thresholds.observation && c < thresholds.considerContact) {
       triggers.push({
         action: 'observation',
         urgency: (c - thresholds.observation) /
                  (thresholds.considerContact - thresholds.observation),
+      });
+      trace.push({
+        gate: '开口', fired: true, action: 'observation',
+        reason: 'connection 进了观察区',
+        detail: { connection: r3(c), 观察线: thresholds.observation, 考虑线: thresholds.considerContact },
+      });
+    } else if (c < thresholds.observation) {
+      trace.push({
+        gate: '开口', fired: false,
+        reason: 'connection 还没到观察线',
+        detail: { connection: r3(c), 还差: r3(thresholds.observation - c) },
       });
     }
 
@@ -443,11 +465,27 @@ function createJiwen(opts) {
             reason: 'pride_block',
             urgency: c - 0.30,
           });
+          trace.push({
+            gate: '开口', fired: false, divertedTo: 'find_activity',
+            reason: 'pride 挡住开口，转身去找事做',
+            detail: { pride: r3(p), 嘴硬线: thresholds.prideBlock, immersion: r3(i) },
+          });
+        } else {
+          trace.push({
+            gate: '开口', fired: false,
+            reason: 'pride 挡住开口，immersion 又缓冲住了（没转成找事做）',
+            detail: { pride: r3(p), 嘴硬线: thresholds.prideBlock, immersion: r3(i), immersion上限: 0.2 },
+          });
         }
       } else {
         triggers.push({
           action: 'contact',
           urgency: c - 0.30,
+        });
+        trace.push({
+          gate: '开口', fired: true, action: 'contact',
+          reason: '过了 pride 闸门',
+          detail: { pride: r3(p), 嘴硬线: thresholds.prideBlock },
         });
       }
     }
@@ -458,22 +496,58 @@ function createJiwen(opts) {
         urgency: Math.min(1, c - 0.40),
         forced: true,
       });
+      trace.push({
+        gate: '开口', fired: true, action: 'contact', forced: true,
+        reason: '过了强制线，pride 挡不住了',
+        detail: { connection: r3(c), 强制线: thresholds.forceContact },
+      });
     }
 
     // 低情绪自我调节：心情差或太躁时主动找事做（与 pride_block 并列）
     if (v <= thresholds.valenceActivity || a >= thresholds.arousalAgitation) {
       const alreadyFinding = triggers.some(t => t.action === 'find_activity');
+      const lowValence = v <= thresholds.valenceActivity;
       if (!alreadyFinding && i < 0.3) {
-        const reason = v <= thresholds.valenceActivity ? 'low_valence' : 'high_arousal';
+        const reason = lowValence ? 'low_valence' : 'high_arousal';
         triggers.push({
           action: 'find_activity',
           reason,
-          urgency: Math.min(1, Math.abs(v <= thresholds.valenceActivity ? v : a) / 1),
+          urgency: Math.min(1, Math.abs(lowValence ? v : a) / 1),
+        });
+        trace.push({
+          gate: '自我调节', fired: true, action: 'find_activity',
+          reason: lowValence ? 'valence 过低' : 'arousal 过高',
+          detail: { valence: r3(v), arousal: r3(a) },
+        });
+      } else if (!alreadyFinding) {
+        trace.push({
+          gate: '自我调节', fired: false,
+          reason: 'immersion 太高，没转去找事做',
+          detail: { immersion: r3(i), immersion上限: 0.3 },
         });
       }
     }
 
+    lastTriggerTrace = trace;
     return triggers;
+  }
+
+  // ── 决策轨迹：上一次 checkThresholds 里每个闸门的判定 ──────────
+  // 返回 [{ gate, fired, action?, divertedTo?, reason, detail }]
+  // 用途：角色「该开口却没开口」时，直接看是哪根轴挡的，不用从五轴数值里反推。
+  function getTriggerTrace() {
+    return lastTriggerTrace;
+  }
+
+  // 一句话概括上一次判定——给日志/调试用
+  function explainTrigger() {
+    if (lastTriggerTrace.length === 0) return '（还没 tick 过）';
+    const fired = lastTriggerTrace.filter(t => t.fired);
+    const blocked = lastTriggerTrace.filter(t => !t.fired);
+    if (fired.length > 0) {
+      return '已触发: ' + fired.map(t => t.action + '（' + t.reason + '）').join('、');
+    }
+    return '未触发: ' + blocked.map(t => t.reason).join('；');
   }
 
   // ── 外部行为更新沉浸度（同时部分缓解连接需求） ──
@@ -653,6 +727,8 @@ function createJiwen(opts) {
     resetConnection,
     setActivity,
     checkThresholds,
+    getTriggerTrace,
+    explainTrigger,
     setLastChatMessageId,
     getLastChatMessageId,
     setLastBotMessageId,

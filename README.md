@@ -234,6 +234,8 @@ const state = await jiwen.getState();
 | `resetConnection()` | 连接需求归零（对方回复后调用，不是开口后） |
 | `setActivity(type, label)` | 设置沉浸度（reading / search / browse / observe） |
 | `checkThresholds()` | 只检查阈值，不推进状态 |
+| `getTriggerTrace()` | 上一次阈值判定的决策轨迹：每个闸门过了还是被挡、被哪根轴挡的 |
+| `explainTrigger()` | 把上面那条轨迹压成一句话（调试/日志用） |
 | `setLastChatMessageId(id)` | 标记已分析到的消息 ID |
 | `getLastChatMessageId()` | 获取上次分析到的消息 ID |
 | `setUserStatus(status)` | 设置对方状态（active / busy / away / sleeping） |
@@ -271,6 +273,32 @@ const jiwen = createJiwen({
 console.log(jiwen.getStateSummary());
 // [积温] c:0.15(悠闲) p:0.40(端着) v:0.20(中性) a:-0.10(平静) i:0.50(沉浸于reading) | userStatus: active
 ```
+
+### 决策轨迹：他为什么没开口？
+
+判断"没触发"比"触发"更需要解释——角色该开口却没开口时，光看五个数值是猜不出原因的。
+
+`getTriggerTrace()` 给出上一次判定的完整因果链：每个闸门**过了还是被挡、被哪根轴挡的、差多少**。
+
+```js
+const triggers = await jiwen.tick(5);
+if (triggers.length === 0) {
+  console.log(jiwen.getTriggerTrace());
+  // [
+  //   { gate: '开口', fired: false,
+  //     reason: 'pride 挡住开口，immersion 又缓冲住了（没转成找事做）',
+  //     detail: { pride: 0.90, 嘴硬线: 0.50, immersion: 0.50, immersion上限: 0.2 } }
+  // ]
+}
+```
+
+`explainTrigger()` 是它的一句话版本，`verbose` 模式下会在没触发时自动打进日志：
+
+```
+[积温] 未触发原因: 未触发: pride 挡住开口，immersion 又缓冲住了（没转成找事做）
+```
+
+触发时同样有记录（哪个闸门放行的、是不是走了强制线），所以**"开口"和"没开口"都能追溯到同一条链**。
 
 ### 语调网格（推荐）
 
